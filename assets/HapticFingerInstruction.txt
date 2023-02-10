@@ -1,0 +1,20 @@
+Instruction to bring up the haptic fingerL
+
+1. Connect the micro-usb to the port close to HTMI port (the one in the middle)
+2. In the wired connection setting of the sensor, set IPV6 to "Disable" and the IPV4 to "Linnk-Local".
+3. In the terminal ssh to the raspberrypi : -> ssh pi@raspberrypi.local       (password:  2880)
+4. In the pi terminal run vncserver:  -> vncserver
+5. Run roscore
+6. Open VNC viewer. Connect to the ip address given in raspberrypi ssh window. remember to add :1 at the end of the ip address.
+7. Correct the ip address in server.py and client.py. The ip adress is taken by  ->  hostname -I
+8. Run server.py first and then run cient.py in the raspberrypi window.
+9. Everything should be working alright now and you can check by rostopic echo that if the sensor image is being published properly.
+
+
+Troubleshoot:
+- If you cannot ssh (or cannot ping raspberrypi.local), sometime a restart or reconnecting the sensor will solve the prblem.
+- If the VNC Viewer window does not show anything after connecting, you probably did not include the :1 in the ip address. Or the server.py is not running.
+
+
+commandline publisher of robot data
+rostopic pub /robot_pose std_msgs/Float64MultiArray "{data: [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],layout: {dim:[], data_offset: 1"}} -r 1000
