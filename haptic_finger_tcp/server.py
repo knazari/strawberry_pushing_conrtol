@@ -17,7 +17,7 @@ from cv_bridge import CvBridge
 # Start a socket listening for connections on 0.0.0.0:8000 (0.0.0.0 means
 # all interfaces)
 server_socket = socket.socket()
-server_socket.bind(('169.254.31.136', 8000))
+server_socket.bind(('169.254.214.66', 8000))
 server_socket.listen(0)
 
 # Accept a single connection and make a file-like object out of it

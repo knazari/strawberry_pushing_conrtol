@@ -160,6 +160,7 @@ endif()
 # file to compile
 set(EXECUTABLE_FILES
 stem_pusher
+stem_pusher_vel
 )
 
 # add the executable
