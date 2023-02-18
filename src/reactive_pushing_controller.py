@@ -38,25 +38,30 @@ class model(nn.Module):
 class PushingController:
 	def __init__(self):
 		super(PushingController, self).__init__()
-		self.time_step = 0
+		
 		self.stop = 0
+		self.time_step = 0
 		self.bridge = CvBridge()
-		self.haptic_finger_data   = np.zeros((1000, 3, 256, 256))
-		self.robot_data 	      = np.zeros((1000, 6))
-		self.save_path = "/home/kiyanoush/Cpp_ws/src/haptic_finger_control/RT-Data/reactive/"
+		self.robot_pose_data = np.zeros((1000, 10))
+		self.robot_vel_data = np.zeros((1000, 3))
+		self.localisation = np.zeros((1000, 1))
+		self.haptic_finger_data = np.zeros((1000, 3, 256, 256))
+
+		self.save_path = "/home/kiyanoush/Cpp_ws/src/haptic_finger_control/RT-Data/reactive/008/"
 
 		rospy.init_node('listener', anonymous=True, disable_signals=True)
-		self.rot_publisher = rospy.Publisher('/wrist_', Float64MultiArray, queue_size=1)
+		self.rot_publisher = rospy.Publisher('/stem_pose', Float64MultiArray, queue_size=1)
 		self.init_sub()
 		self.load_model()
 		self.load_scaler()
 		self.control_loop()
 	
 	def init_sub(self):
-		robot_sub = message_filters.Subscriber('/robot_pose', Float64MultiArray)
+		robot_pose_sub = message_filters.Subscriber('/robot_pose', Float64MultiArray)
+		robot_vel_sub = message_filters.Subscriber('/robot_vel', Float64MultiArray)
 		haptic_finger_sub = message_filters.Subscriber("/fing_camera/color/image_raw", Image)
 
-		self.sync_sub = [robot_sub, haptic_finger_sub]
+		self.sync_sub = [robot_pose_sub, robot_vel_sub, haptic_finger_sub]
 
 		sync_cb = message_filters.ApproximateTimeSynchronizer(self.sync_sub, 1, 0.1, allow_headerless=True)
 		sync_cb.registerCallback(self.callback)
@@ -65,28 +70,29 @@ class PushingController:
 		
 		self.pred_model = model()
 		self.pred_model.load_state_dict(torch.load(\
-									"/home/kiyanoush/Cpp_ws/src/haptic_finger_control/force_localisation/localisation_cnn_8_16_resmpl.pth"))
+									"/home/kiyanoush/Cpp_ws/src/haptic_finger_control/force_localisation/dataset/localisation_cnn_8_16_resmpl.pth"))
 		self.pred_model.eval()
 
 	def load_scaler(self):
 
 		self.nn_pred_scaler = pickle.load(open("/home/kiyanoush/Cpp_ws/src/haptic_finger_control/force_localisation/distance_scaler.pkl", 'rb'))
 
-	def callback(self, robot_msg, haptic_finger_msg):
-		self.stop = robot_msg.data[-1]
+	def callback(self, robot_poes_msg, robot_vel_msg, haptic_finger_msg):
+		self.stop = robot_poes_msg.data[-1]
 		if self.stop == 0:
 			
-			rot_mat = R.from_matrix([[robot_msg.data[0], robot_msg.data[4], robot_msg.data[8]],\
-									[robot_msg.data[1], robot_msg.data[5], robot_msg.data[9]],\
-									[robot_msg.data[2], robot_msg.data[6], robot_msg.data[10]]])
-																	
+			rot_mat = R.from_matrix([[robot_poes_msg.data[0], robot_poes_msg.data[4], robot_poes_msg.data[8]],\
+									[robot_poes_msg.data[1], robot_poes_msg.data[5], robot_poes_msg.data[9]],\
+									[robot_poes_msg.data[2], robot_poes_msg.data[6], robot_poes_msg.data[10]]])												
 			
-			euler = rot_mat.as_euler('zyx', degrees=True)
+			euler = rot_mat.as_euler('xyz', degrees=True)
 			quat  = rot_mat.as_quat()
 
-			self.robot_data[self.time_step] = np.array([robot_msg.data[12], robot_msg.data[13], robot_msg.data[14],\
+			self.robot_pose_data[self.time_step] = np.array([robot_poes_msg.data[12], robot_poes_msg.data[13], robot_poes_msg.data[14],\
 														 euler[0], euler[1], euler[2],\
 														quat[0], quat[1], quat[2], quat[3]])
+			self.robot_vel_data[self.time_step] = np.array([robot_vel_msg.data[0], robot_vel_msg.data[1], robot_vel_msg.data[2]])
+
 			haptic_finger_img = self.bridge.imgmsg_to_cv2(haptic_finger_msg, desired_encoding='passthrough')
 			haptic_finger_img = PILImage.fromarray(haptic_finger_img).resize((256, 256), PILImage.Resampling.LANCZOS)
 			haptic_finger_img = np.array(haptic_finger_img)
@@ -104,8 +110,10 @@ class PushingController:
 		self.time_step +=1
 	
 	def save_data(self):
-		np.save(self.save_path + "haptic_finger_data.npy", self.haptic_finger_data[:self.time_step])
-		np.save(self.save_path + "robot_data.npy", self.robot_data[:self.time_step]) # columns: x, y, z, eu_x, eu_y, eu_z, quat_x, quat_y, quat_z, _quat_w
+		np.save(self.save_path + "haptic_finger.npy", self.haptic_finger_data[:self.time_step-1])
+		np.save(self.save_path + "robot_pose.npy", self.robot_pose_data[:self.time_step-1]) # columns: x, y, z, eu_x, eu_y, eu_z, quat_x, quat_y, quat_z, _quat_w
+		np.save(self.save_path + "robot_velocity.npy", self.robot_vel_data[:self.time_step-1]) # v_y and w_z, and w_z_des
+		np.save(self.save_path + "localisation.npy", self.localisation[:self.time_step-1])
 	
 	def preprocess_tactile(self, tactile):
 		tactile_norm = tactile / 255.0
@@ -118,6 +126,7 @@ class PushingController:
 		tactile_input = self.preprocess_tactile(self.haptic_finger_data[self.time_step-1])
 		# tactile_input = self.preprocess_tactile(self.haptic_finger_data)
 		stem_pose = self.pred_model(tactile_input).item()
+		self.localisation[self.time_step] = stem_pose
 		
 		return stem_pose
 	
@@ -125,17 +134,14 @@ class PushingController:
 
 		stem_pose = self.get_stem_position()
 
-		wrist_rot_msg = Float64MultiArray()
+		step_pose_msg = Float64MultiArray()
 
-		if stem_pose < 0.45:
-			wrist_rot_msg.data = [stem_pose, 0]
-		elif 0.5 < stem_pose < 0.6:
-			wrist_rot_msg.data = [stem_pose, 0]
+		if stem_pose > 0.61:
+			step_pose_msg.data = [0.0, 0.0]
 		else:
-			wrist_rot_msg.data = [0, 0]
+			step_pose_msg.data = [stem_pose, 0.0]
 		
-		self.rot_publisher.publish(wrist_rot_msg)
-		# print(stem_pose)
+		self.rot_publisher.publish(step_pose_msg)
 	
 	def control_loop(self):
 		rate = rospy.Rate(60)
@@ -161,5 +167,5 @@ class PushingController:
 
 if __name__ == '__main__':
 	pc = PushingController()
-	# pc.save_data()
+	pc.save_data()
 

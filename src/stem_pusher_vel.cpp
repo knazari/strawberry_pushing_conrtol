@@ -11,10 +11,10 @@
 #include <Eigen/Dense>
 
 
-float rot_value = 0;
+float stem_pose = 0.0;
 void wrist_rot_cb(const std_msgs::Float64MultiArray& rotation)
 {
-  rot_value = rotation.data[0];
+  stem_pose = rotation.data[0];
 }
 
 int main(int argc, char** argv) {
@@ -22,7 +22,8 @@ int main(int argc, char** argv) {
     ros::init(argc, argv, "robot_pose_pub");
     ros::NodeHandle n;
     ros::Publisher robot_pose_pub = n.advertise<std_msgs::Float64MultiArray>("robot_pose", 1000);
-    ros::Subscriber wrist_rot = n.subscribe("/wrist_rotation", 1000, wrist_rot_cb);
+    ros::Publisher robot_vel_pub = n.advertise<std_msgs::Float64MultiArray>("robot_vel", 1000);
+    ros::Subscriber wrist_rot = n.subscribe("/stem_pose", 1000, wrist_rot_cb);
 
     franka::Robot robot(argv[1]);
     setDefaultBehavior(robot);
@@ -30,8 +31,8 @@ int main(int argc, char** argv) {
     // First move the robot to a suitable joint configuration
     // std::array<double, 7> q_goal = {{0, -M_PI_4, 0, -3 * M_PI_4, 0, M_PI_2, M_PI_4}};
     // std::array<double, 7> q_goal = {{0.14360167152468625, 0.1753777056788718, -0.2196985128072391, -1.365035858023108, -0.15087520535954108, 3.1017061897913636, -2.018819763140546}};
-    std::array<double, 7> q_goal = {{-0.00635813,0.0372822,-0.0373876,-1.30535,0.0145356,2.85452,0.787199}};
-    // std::array<double, 7> q_goal = {{0.000189747,-0.348658,-0.0224457,-1.67147,-0.0154906,2.95908,0.788193}};
+    std::array<double, 7> q_goal = {{-0.00635813,0.0372822,-0.0373876,-1.30535,0.0145356,2.85452,0.787199}}; // strawberry stem
+    // std::array<double, 7> q_goal = {{0.000189747,-0.348658,-0.0224457,-1.67147,-0.0154906,2.95908,0.788193}}; // behind stem to avoid contact
     MotionGenerator motion_generator(0.5, q_goal);
     robot.control(motion_generator);
 
@@ -43,19 +44,22 @@ int main(int argc, char** argv) {
         {{20.0, 20.0, 20.0, 25.0, 25.0, 25.0}}, {{20.0, 20.0, 20.0, 25.0, 25.0, 25.0}});
 
     
-    std::string filename = "/home/kiyanoush/Desktop/robot_v_y.csv";
-    std::vector<double> v_y_save;
+    std::string filename = "/home/kiyanoush/Desktop/robot_cart_vel.csv";
+    std::vector< std::vector<double> > robot_traj;
     
     double time = 0.0;
-    double T = 1.2;
+    double T = 2;
     double a = 0.8 / pow(T, 2);
     double v_y = 0;
     double w_z = 0;
-    double T_rot;
-    double alpha_z;
-    double t_start_rot;
-    bool rotate_old = false;
-    bool rotate_new = false;
+    
+    double stem_now = 0.0;
+    double stem_prev = 0.0;
+    double e = 0;
+    double e_dot = 0;
+    double w_z_des = 0;
+    double k_p = 0.5;
+    double k_d = 0.15;
     
     robot.control([=, &time](const franka::RobotState& robot_state,
                                          franka::Duration period) mutable -> franka::CartesianVelocities {
@@ -70,64 +74,72 @@ int main(int argc, char** argv) {
       robot_pose_msg.data = EE_pose_vec;
       robot_pose_pub.publish(robot_pose_msg);
 
-      if (rot_value != 0){
-          rotate_new = true;
-      }
-
-      if (rotate_old != rotate_new){
-        std::cout << "start rotate now ..." << std::endl;
-        t_start_rot = time;
-        T_rot = T - time;
-        // alpha_z = 2 * 3.14 / (3 * pow(T, 2)); // 30 deg wrist rotation
-        alpha_z = 3.14 / pow(T, 2); // 45 degree wrist rotation
-      }
-
+      // linear motion bang-bang reference trajectory
       if (time < T/2){
         v_y = - a * time;
       } else if (time < T){
         v_y = a * time - a * T;
+      } else if (time < 1.2 * T){ // wait for a bit at the end of motion and then return
+        v_y = 0.0;
+      } else if (time < 1.7 * T){ // here the task is finished but we move the robot to the initial pose
+        v_y = a * (time - 1.2 * T);
+      } else if (time < 2.2 * T){
+        v_y = - a * time + 2.2 * a * T;
       }
-      
-      if (rotate_new == true){
-        if ((time - t_start_rot) < T_rot/2){
-          w_z = -alpha_z * (time - t_start_rot);
-          
-      } else if ((time - t_start_rot) < T_rot){
-          w_z = alpha_z * (time - t_start_rot) - alpha_z * T_rot;
-      }
-        
-      }
-     
-      v_y_save.push_back(v_y);
 
-      rotate_old = rotate_new;
-      
+      if (time < T){ // do it only for the forward path
+
+        // rotational motion PID controller
+        if (stem_pose != 0.0){
+          stem_now = stem_pose;
+          if (stem_now != stem_prev){
+            e = -(stem_now - 0.5); // negative because rotation around z is positive in opposite
+            e_dot = stem_now - stem_prev;
+            if (stem_prev == 0){
+              e_dot = 0.0;
+            }
+            w_z_des = k_p * e + k_d * e_dot;
+            // w_z_des = k_p * e;
+          }
+          
+          w_z = w_z + 0.0625 * (w_z_des - w_z);
+          stem_prev = stem_now;
+
+          std::cout << "first  : " << k_p * e << std::endl;
+          std::cout << "second : " << k_d * e_dot << std::endl;
+
+        }
+
+        // log traj data
+        std::vector<double> robot_vel_vec = {v_y, w_z, w_z_des};
+        robot_traj.push_back(robot_vel_vec);
+
+        std_msgs::Float64MultiArray robot_vel_msg;
+        robot_vel_msg.data = robot_vel_vec;
+        robot_vel_pub.publish(robot_vel_msg);
+      }
+
       ros::spinOnce();
 
       franka::CartesianVelocities output = {{0, v_y, 0, 0, 0, w_z}};
-      if (time >= T) {
-        // std::cout << std::endl << "Finished motion, shutting down example" << std::endl;
-        int b = 0;
-        unsigned int milisecond = 500;
+
+      if (time > T and time < 2.2*T) {
         std_msgs::Float64MultiArray robot_pose_msg;
         robot_pose_msg.data.clear();
         robot_pose_msg.data.resize(17);
         int n = EE_pose_vec.size();
         EE_pose_vec[n-1] = 1.0;
         robot_pose_msg.data = EE_pose_vec ;
+        robot_pose_pub.publish(robot_pose_msg);
         
-        while(b<5000){  // 5 seconds - ish   
-          usleep(milisecond);
-          b++;
-          robot_pose_pub.publish(robot_pose_msg);
-          ros::spinOnce();
-        }
+      } else if (time > 2.2 * T){
+        
         std::ofstream RobotPoseCSV;   
         RobotPoseCSV.open(filename);
-        RobotPoseCSV << "v_y" << std::endl;
-        for (int i = 0; i < v_y_save.size(); i++)
+        RobotPoseCSV << "v_y" << "," << "w_z" << "," << "w_z_des" << std::endl;
+        for (int i = 0; i < robot_traj.size(); i++)
         {
-          RobotPoseCSV << v_y_save[i] << std::endl;
+          RobotPoseCSV << robot_traj[i][0] << "," << robot_traj[i][1] << "," << robot_traj[i][2]<< std::endl;
         }
         return franka::MotionFinished(output);
       }
