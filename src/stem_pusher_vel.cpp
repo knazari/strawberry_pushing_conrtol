@@ -49,17 +49,30 @@ int main(int argc, char** argv) {
     
     double time = 0.0;
     double T = 2;
-    double a = 0.8 / pow(T, 2);
+    // double a = 0.8 / pow(T, 2); // linear motion
+    double a = 0.6 / pow(T, 2); // arc motion
     double v_y = 0;
     double w_z = 0;
+    double w_end_of_motion = 0;
+    double w_x = 0;
+    double v_z = 0;
+    // double a_z = 0.2 / pow(T, 2); // this is for proactive controller
+    double a_z = 1.8 * 0.15 / pow(T, 2); // this is for reactive controller
+    double a_w = 2*M_PI / (1.5*pow(T, 2));
     
-    double stem_now = 0.0;
-    double stem_prev = 0.0;
+    double stem_t = 0.0;
+    double stem_t1 = 0.0;
+    double stem_t2 = 0.0;
     double e = 0;
     double e_dot = 0;
     double w_z_des = 0;
-    double k_p = 0.5;
-    double k_d = 0.15;
+
+    // P gain for reactive :
+    // double k_p = 8.0; // 10.0 for linear motion and 8.0 for circular trajectory
+    // P gain for proactive :
+    double k_p = 10.0;
+    double k_d = k_p / 8.0;
+
     
     robot.control([=, &time](const franka::RobotState& robot_state,
                                          franka::Duration period) mutable -> franka::CartesianVelocities {
@@ -77,43 +90,97 @@ int main(int argc, char** argv) {
       // linear motion bang-bang reference trajectory
       if (time < T/2){
         v_y = - a * time;
+        w_x = - a_w * time;
+        v_z = a_z * time;
       } else if (time < T){
         v_y = a * time - a * T;
+        w_x = a_w * time - a_w * T;
+        v_z = -a_z * time + a_z * T;
       } else if (time < 1.2 * T){ // wait for a bit at the end of motion and then return
         v_y = 0.0;
+        w_x = 0.0;
+        v_z = 0;
+        if (time > (1.000 * T) and (time < 1.0006 * T)){
+          w_end_of_motion = w_z;
+        }
+        w_z = (-w_end_of_motion) * (time- T) + w_end_of_motion;
       } else if (time < 1.7 * T){ // here the task is finished but we move the robot to the initial pose
         v_y = a * (time - 1.2 * T);
+        w_x = a_w * (time - 1.2 * T);
+        v_z = -a_z * (time - 1.2 * T);
+        w_z = (-w_end_of_motion) * (time- T) + w_end_of_motion;
       } else if (time < 2.2 * T){
         v_y = - a * time + 2.2 * a * T;
+        w_x = - a_w * time + 2.2 * a_w * T;
+        v_z = a_z * time - 2.2 * a_z * T;
+        w_z = (-w_end_of_motion) * (time- T) + w_end_of_motion;
       }
 
       if (time < T){ // do it only for the forward path
+        // Reactive system: rotational motion PD controller
+        // if (stem_pose < 0.63){
+        // if (time > 0.78){
+        //   stem_t = stem_pose;
+        //   if (stem_t != stem_t1){
+        //     // e = -(stem_t - 0.45); // negative because rotation around z is positive in opposite
+        //     // e_dot = stem_t - stem_t1;
+        //     e = -(stem_t - stem_t1);
+        //     e_dot = -(stem_t - stem_t2);
+        //     if (abs(e) > 0.1){
+        //       e = e * 0.5;
+        //     }
+        //     if (stem_t1 == 0.0 && stem_t2 == 0.0){
+        //       e = 0.001;
+        //       e_dot = 0.001;
+        //     } else if (stem_t1 != 0.0 && stem_t2 == 0.0){
+        //       std::cout << "if 2 ..." << std::endl;
+        //       e = 0.001;
+        //       e_dot = 0.001;
+        //     }
+        //     w_z_des = w_z_des + 0.08*(k_p * e + k_d * e_dot);
+        //     // w_z_des = w_z_des + 0.06*(k_p * e);
+        //   }  
+        //   w_z = w_z + 0.0625 * (w_z_des - w_z);
 
-        // rotational motion PID controller
-        if (stem_pose != 0.0){
-          stem_now = stem_pose;
-          if (stem_now != stem_prev){
-            e = -(stem_now - 0.5); // negative because rotation around z is positive in opposite
-            e_dot = stem_now - stem_prev;
-            if (stem_prev == 0){
-              e_dot = 0.0;
+        //   stem_t2 = stem_t1;
+        //   stem_t1 = stem_t;
+        // }
+
+        // Proactive system: rotational motion PD controller
+        // if ((stem_pose < 0.460 || stem_pose > 0.469) && stem_pose != 0.0){
+        if (time > 0.78){
+          stem_t = stem_pose;
+          if (stem_t != stem_t1){
+            e = -(stem_t - stem_t1)*4.0; // negative because rotation around z is positive in opposite
+            e_dot = -(stem_t - stem_t2)*4.0;
+            if (abs(e) > 0.1){
+              e = e * 0.2;
             }
-            w_z_des = k_p * e + k_d * e_dot;
-            // w_z_des = k_p * e;
-          }
-          
+            if (stem_t1 == 0.0 && stem_t2 == 0.0){
+              e = 0.001;
+              e_dot = 0.0;
+            } else if (stem_t1 != 0.0 && stem_t2 == 0.0){
+              std::cout << "if 2 ..." << std::endl;
+              e = 0.001;
+              e_dot = 0.001;
+            }
+            w_z_des = w_z_des + 0.08*(k_p * e + k_d * e_dot);
+            // w_z_des = w_z_des + 0.06*(k_p * e);
+          }  
           w_z = w_z + 0.0625 * (w_z_des - w_z);
-          stem_prev = stem_now;
 
-          std::cout << "first  : " << k_p * e << std::endl;
-          std::cout << "second : " << k_d * e_dot << std::endl;
-
+          stem_t2 = stem_t1;
+          stem_t1 = stem_t;
         }
 
-        // log traj data
-        std::vector<double> robot_vel_vec = {v_y, w_z, w_z_des};
-        robot_traj.push_back(robot_vel_vec);
+        // if (int(round(time*1000)) % 5 == 0){
+        //   // std::cout << "w_z_des: " << w_z_des << std::endl;
+        //   std::cout << "time    : " << time << ", w_z : " << w_z_des << std::endl;
+        // }
 
+        // log traj data
+        std::vector<double> robot_vel_vec = {0, v_y, v_z, w_x, 0.0, 0};
+        robot_traj.push_back(robot_vel_vec);
         std_msgs::Float64MultiArray robot_vel_msg;
         robot_vel_msg.data = robot_vel_vec;
         robot_vel_pub.publish(robot_vel_msg);
@@ -121,7 +188,7 @@ int main(int argc, char** argv) {
 
       ros::spinOnce();
 
-      franka::CartesianVelocities output = {{0, v_y, 0, 0, 0, w_z}};
+      franka::CartesianVelocities output = {{0, v_y, v_z, w_x, 0, w_z}};
 
       if (time > T and time < 2.2*T) {
         std_msgs::Float64MultiArray robot_pose_msg;

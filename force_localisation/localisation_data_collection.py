@@ -122,21 +122,21 @@ class Robot(object):
     def collect_force_localisation_data(self, dist):
         self.dist = dist # this can be one of the 
         
-        c_pose = self.current_pose()
-        self.go_to_pose(c_pose.position.x, c_pose.position.y, c_pose.position.z-0.001)
+        # c_pose = self.current_pose()
+        # self.go_to_pose(c_pose.position.x, c_pose.position.y, c_pose.position.z-0.001)
 
-        print("started sleeping ...")
+        # print("started sleeping ...")
         time.sleep(2)
         self.save_localisation_result()
         print("finished saving ...")
 
 
 def main():
-    save_path = "/home/kiyanoush/Cpp_ws/src/haptic_finger_control/force_localisation/dataset/124"
+    save_path = "/home/kiyanoush/Cpp_ws/src/haptic_finger_control/force_localisation/dataset/data/130"
     robot = Robot(save_path=save_path)
-    c_pose = robot.current_pose()
-    robot.go_to_pose(c_pose.position.x, c_pose.position.y, c_pose.position.z)
-    distance_to_base = 0.000001
+    # c_pose = robot.current_pose()
+    # robot.go_to_pose(c_pose.position.x, c_pose.position.y, c_pose.position.z)
+    distance_to_base = 0.055
     robot.collect_force_localisation_data(distance_to_base)
 
     rospy.spin()

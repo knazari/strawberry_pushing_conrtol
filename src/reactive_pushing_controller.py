@@ -1,4 +1,5 @@
 #! /usr/bin/env python3
+import cv2
 import time
 import rospy
 import torch
@@ -43,11 +44,10 @@ class PushingController:
 		self.time_step = 0
 		self.bridge = CvBridge()
 		self.robot_pose_data = np.zeros((1000, 10))
-		self.robot_vel_data = np.zeros((1000, 3))
+		self.robot_vel_data = np.zeros((1000, 6))
 		self.localisation = np.zeros((1000, 1))
 		self.haptic_finger_data = np.zeros((1000, 3, 256, 256))
-
-		self.save_path = "/home/kiyanoush/Cpp_ws/src/haptic_finger_control/RT-Data/reactive/008/"
+		self.save_path = "/home/kiyanoush/Cpp_ws/src/haptic_finger_control/RT-Data/video_single_stem/failure_open_loop/004/"
 
 		rospy.init_node('listener', anonymous=True, disable_signals=True)
 		self.rot_publisher = rospy.Publisher('/stem_pose', Float64MultiArray, queue_size=1)
@@ -72,6 +72,8 @@ class PushingController:
 		self.pred_model.load_state_dict(torch.load(\
 									"/home/kiyanoush/Cpp_ws/src/haptic_finger_control/force_localisation/dataset/localisation_cnn_8_16_resmpl.pth"))
 		self.pred_model.eval()
+		for param in self.pred_model.parameters():
+			param.grad = None
 
 	def load_scaler(self):
 
@@ -91,9 +93,10 @@ class PushingController:
 			self.robot_pose_data[self.time_step] = np.array([robot_poes_msg.data[12], robot_poes_msg.data[13], robot_poes_msg.data[14],\
 														 euler[0], euler[1], euler[2],\
 														quat[0], quat[1], quat[2], quat[3]])
-			self.robot_vel_data[self.time_step] = np.array([robot_vel_msg.data[0], robot_vel_msg.data[1], robot_vel_msg.data[2]])
+			self.robot_vel_data[self.time_step] = np.array(robot_vel_msg.data)
 
 			haptic_finger_img = self.bridge.imgmsg_to_cv2(haptic_finger_msg, desired_encoding='passthrough')
+			cv2.imwrite(self.save_path + "image/" + str(self.time_step) + ".png", haptic_finger_img)
 			haptic_finger_img = PILImage.fromarray(haptic_finger_img).resize((256, 256), PILImage.Resampling.LANCZOS)
 			haptic_finger_img = np.array(haptic_finger_img)
 			haptic_finger_img[170:] = 0
@@ -105,7 +108,6 @@ class PushingController:
 				self.untouched_img = haptic_finger_img_chanlfrst
 			
 			self.haptic_finger_data[self.time_step] = haptic_finger_img_chanlfrst
-			# self.haptic_finger_data = haptic_finger_img_chanlfrst
 
 		self.time_step +=1
 	
@@ -123,24 +125,19 @@ class PushingController:
 		return tactile_tensor.float()
 
 	def get_stem_position(self):
+
 		tactile_input = self.preprocess_tactile(self.haptic_finger_data[self.time_step-1])
-		# tactile_input = self.preprocess_tactile(self.haptic_finger_data)
 		stem_pose = self.pred_model(tactile_input).item()
 		self.localisation[self.time_step] = stem_pose
+		# print(stem_pose)
 		
 		return stem_pose
 	
-	def calculate_control_action(self):
+	def publish_stem_position(self):
 
 		stem_pose = self.get_stem_position()
-
 		step_pose_msg = Float64MultiArray()
-
-		if stem_pose > 0.61:
-			step_pose_msg.data = [0.0, 0.0]
-		else:
-			step_pose_msg.data = [stem_pose, 0.0]
-		
+		step_pose_msg.data = [stem_pose, 0.0]
 		self.rot_publisher.publish(step_pose_msg)
 	
 	def control_loop(self):
@@ -153,8 +150,7 @@ class PushingController:
 					self.t0 = time.time()
 
 				if self.stop == 0.0 and self.time_step > 0:
-					self.calculate_control_action()
-					pass
+					self.publish_stem_position()
 				elif self.stop == 1.0:
 					[sub.sub.unregister() for sub in self.sync_sub]
 					break
